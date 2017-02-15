@@ -27,7 +27,7 @@ var limiter = require('express-limiter')(app, client)
  * limiter = require('express-limiter')(router, client)
  */
 
-limiter({
+const rateLimiter = limiter({
   path: '/api/action',
   method: 'get',
   lookup: ['connection.remoteAddress'],
@@ -39,6 +39,13 @@ limiter({
 app.get('/api/action', function (req, res) {
   res.send(200, 'ok')
 })
+
+// reduce the number of "hits" left, before hitting the limit.
+rateLimiter.updateLimit(req, res, -1);
+
+// increase the number of "hits" left, before hitting the limit.
+rateLimiter.updateLimit(req, res, -1);
+
 ```
 
 ### API options
