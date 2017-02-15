@@ -3,167 +3,66 @@ Rate limiting middleware for Express applications built on redis.
 
 Changed from original:
 
-* Added option to manually increment/decrease rate limit hits.
-* Added You can now specify a list of paths to attache to, allowing you to exclude specific paths.
+* Added option to manually increment/decrease rate limit hits. 
 * General clean ups and other bits I personally felt was needed.
+* Removed ability to use a function for lookup.
 
-### How to use
-
-``` sh
-npm install express-limiter --save
 ```
+var express = require('express'),
+    app     = express(),
+    client  = require('redis').createClient(),
+    limiter = require('express-limiter');
 
-``` js
-var express = require('express')
-var app = express()
-var client = require('redis').createClient()
 
-var limiter = require('express-limiter')(app, client)
-
-/**
- * you may also pass it an Express 4.0 `Router`
- *
- * router = express.Router()
- * limiter = require('express-limiter')(router, client)
- */
-
-const rateLimiter = limiter({
-  path: '/api/action',
-  method: 'get',
-  lookup: ['connection.remoteAddress'],
-  // 150 requests per hour
-  total: 150,
-  expire: 1000 * 60 * 60
-})
-
-app.get('/api/action', function (req, res) {
-  res.send(200, 'ok')
-})
-
-// reduce the number of "hits" left, before hitting the limit.
-rateLimiter.updateLimit(req, res, -1);
-
-// increase the number of "hits" left, before hitting the limit.
-rateLimiter.updateLimit(req, res, -1);
+var rateLimiter = new limiter(app, client, {
+    path: '/api/v1/snapshot',
+    method: 'all',
+    lookup: ['connection.remoteAddress', 'headers.clientid'], // Limit based on IP and clientid
+    total: 20, // 120 requests per minute
+    expire: 1000 * 60,
+    autoUpdate: false,
+    onRateLimited: function(req, res) {
+        res.status(429).send({
+            status: 429,
+            error: 'Rate limit exceeded'
+        });
+    }
+});
 
 ```
 
 ### API options
 
 ``` js
-limiter(options)
+new limiter(.., .., options)
 ```
 
  - `path`: `String` *optional* route path to the request
- - `paths`: `Array` *optional* array of route paths to the request
+ - `paths`: `Array` *optional* route paths to the request
  - `method`: `String` *optional* http method. accepts `get`, `post`, `put`, `delete`, and of course Express' `all`
- - `lookup`: `Function|String|Array.<String>` value lookup on the request object. Can be a single value, array or function. See [examples](#examples) for common usages
+ - `lookup`: `String|Array.<String>` value lookup on the request object. Can be a single value, array or function. See [examples](#examples) for common usages
  - `total`: `Number` allowed number of requests before getting rate limited
  - `expire`: `Number` amount of time in `ms` before the rate-limited is reset
  - `whitelist`: `function(req)` optional param allowing the ability to whitelist. return `boolean`, `true` to whitelist, `false` to passthru to limiter.
  - `skipHeaders`: `Boolean` whether to skip sending HTTP headers for rate limits ()
  - `ignoreErrors`: `Boolean` whether errors generated from redis should allow the middleware to call next().  Defaults to false.
  - `onRateLimited`: `Function` called when a request exceeds the configured rate limit.
+ - `autoUpdate`: `Boolean` Whether it should automatically update the rate limit remaining hits or not. Useful if you want to manage that yourself
 
-### Examples
 
-``` js
-// limit by IP address
-limiter({
-  ...
-  lookup: 'connection.remoteAddress'
-  ...
-})
-
-// or if you are behind a trusted proxy (like nginx)
-limiter({
-  lookup: 'headers.x-forwarded-for'
-})
-
-// by user (assuming a user is logged in with a valid id)
-limiter({
-  lookup: 'user.id'
-})
-
-// limit your entire app
-limiter({
-  path: '*',
-  method: 'all',
-  lookup: 'connection.remoteAddress'
-})
-
-// limit users on same IP
-limiter({
-  path: '*',
-  method: 'all',
-  lookup: ['user.id', 'connection.remoteAddress']
-})
-
-// specific paths to apply the limiter to. Useful if you need to exclude a specific endpoint.
-limiter({
-  paths: ['/api/users', '/api/products'],
-  method: 'all',
-  lookup: ['user.id', 'connection.remoteAddress']
-})
-
-// whitelist user admins
-limiter({
-  path: '/delete/thing',
-  method: 'post',
-  lookup: 'user.id',
-  whitelist: function (req) {
-    return !!req.user.is_admin
-  }
-})
-
-// skip sending HTTP limit headers
-limiter({
-  path: '/delete/thing',
-  method: 'post',
-  lookup: 'user.id',
-  whitelist: function (req) {
-    return !!req.user.is_admin
-  },
-  skipHeaders: true
-})
-
-// call a custom limit handler
-limiter({
-  path: '*',
-  method: 'all',
-  lookup: 'connection.remoteAddress',
-  onRateLimited: function (req, res, next) {
-    next({ message: 'Rate limit exceeded', status: 429 })
-  }
-})
-
-// with a function for dynamic-ness
-limiter({
-  lookup: function(req, res, opts, next) {
-    if (validApiKey(req.query.api_key)) {
-      opts.lookup = 'query.api_key'
-      opts.total = 100
-    } else {
-      opts.lookup = 'connection.remoteAddress'
-      opts.total = 10
-    }
-    return next()
-  }
-})
-
-```
-
-### as direct middleware
+### API Method "updateLimit"
 
 ``` js
-app.post('/user/update', limiter({ lookup: 'user.id' }), function (req, res) {
-  User.find(req.user.id).update(function (err) {
-    if (err) next(err)
-    else res.send('ok')
-  })
+const rateLimiter = new limiter(.., .., options);
+
+app.get('/api/action', function (req, res) {
+    rateLimiter.updateLimit(req, res, value);
+    ...
 })
 ```
+
+ - `req`: *required* the express request object.
+ - `res`: *required* the express response object.
+ - `value`: `Number` *required* value you want to add or remove from the remaining hits.
 
 ## License MIT
-
-Happy Rate Limiting!

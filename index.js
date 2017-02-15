@@ -1,100 +1,102 @@
-module.exports = function(app, db) {
-    return function(opts) {
-        const updateLimit = function (req, res, change, next) {
-            next = next || function() {};
+function RateLimiter(app, db, opts) {
+    this.opts = opts;
+    this.db = db;
 
-            const lookups = opts.lookup.map(function(item) {
-                return item + ':' + item.split('.').reduce(function(prev, cur) {
-                    return prev[cur]
-                }, req);
-            }).join(':');
-
-            const method = (opts.method || req.method).toLowerCase(),
-                  key = 'ratelimit:' + (req.path || opts.paths[0]) + ':' + method + ':' + lookups;
-
-            db.get(key, function(err, limit) {
-                if (err && opts.ignoreErrors) {
-                    return next();
-                }
-
-                const timeNow = Date.now();
-
-                limit = limit ? JSON.parse(limit) : {
-                    total: opts.total,
-                    remaining: opts.total,
-                    reset: timeNow + opts.expire
-                }
-
-                if (timeNow > limit.reset) {
-                    limit.reset = timeNow + opts.expire;
-                    limit.remaining = opts.total;
-                }
-
-                // do not allow negative remaining
-                limit.remaining = Math.max(Number(limit.remaining) + change, -1);
-
-                db.set(key, JSON.stringify(limit), 'PX', opts.expire, function(e) {
-                    if (!opts.skipHeaders) {
-                        res.set('X-RateLimit-Limit', limit.total);
-                        res.set('X-RateLimit-Reset', Math.ceil(limit.reset / 1000)); // UTC epoch seconds
-                        res.set('X-RateLimit-Remaining', Math.max(limit.remaining, 0));
-                    }
-
-                    if (limit.remaining >= 0) {
-                        return next();
-                    }
-
-                    if (!opts.skipHeaders) {
-                        res.set('Retry-After', (limit.reset - Date.now()) / 1000);
-                    }
-
-                    opts.onRateLimited(req, res, next);
-                });
+    if (this.opts.method) {
+        if (this.opts.path) {
+            app[this.opts.method](this.opts.path, (req, res, next) => {
+                this.middleware(req, res, next, this);
             });
         }
 
-        var middleware = function(req, res, next) {
-            if (opts.whitelist && opts.whitelist(req)) {
-                return next();
-            }
-
-            opts.lookup = Array.isArray(opts.lookup) ? opts.lookup : [opts.lookup];
-
-            opts.onRateLimited = typeof opts.onRateLimited === 'function' ? opts.onRateLimited : function(req, res, next) {
-                res.status(429).send('Rate limit exceeded')
-            }
-
-            if (!opts.autoIncrement) {
-                return next();
-            }
-
-            updateLimit(req, res, -1, next);
-        }
-
-        if (typeof(opts.lookup) === 'function') {
-            var callableLookup = opts.lookup;
-
-            middleware = function(middleware, req, res, next) {
-                return callableLookup(req, res, opts, function() {
-                    return middleware(req, res, next);
+        if (this.opts.path && typeof this.opts.path === "array") {
+            this.opts.path.map(function(path) {
+                app[this.opts.method](path, (req, res, next) => {
+                    this.middleware(req, res, next, this);
                 });
-            }.bind(this, middleware)
+            });
         }
-
-        if (opts.method) {
-            if (opts.path) {
-                app[opts.method](opts.path, middleware);
-            }
-
-            if (opts.paths && typeof opts.paths === "array") {
-                opts.paths.map(function(path) {
-                    app[opts.method](path, middleware);
-                });
-            }
-        }
-
-        middleware.prototype.updateLimit = updateLimit;
-
-        return middleware
     }
 }
+
+RateLimiter.prototype.middleware = function(req, res, next, scope) {
+    if (scope.opts.whitelist && scope.opts.whitelist(req)) {
+        return next();
+    }
+
+    scope.opts.lookup = Array.isArray(scope.opts.lookup) ? scope.opts.lookup : [scope.opts.lookup];
+    scope.opts.onRateLimited = typeof scope.opts.onRateLimited === 'function' ? scope.opts.onRateLimited : function(req, res, next) {
+        res.status(429).send('Rate limit exceeded')
+    }
+
+    if (!scope.opts.autoUpdate) {
+        return next();
+    }
+
+    scope.updateLimit(req, res, -1, next, scope);
+}
+
+RateLimiter.prototype.updateLimit = function(req, res, change, next) {
+    next = next || function() {};
+
+    const lookups = this.opts.lookup.map(function(item) {
+        return item + ':' + item.split('.').reduce(function(prev, cur) {
+            return prev[cur]
+        }, req);
+    }).join(':');
+
+    const method = (this.opts.method || req.method).toLowerCase(),
+          key = 'ratelimit:' + (this.opts.path || req.path) + ':' + method + ':' + lookups;
+
+    this.db.get(key, (err, limit) => {
+        if (err && this.opts.ignoreErrors) {
+            return next();
+        }
+
+        const timeNow = Date.now();
+
+        limit = limit ? JSON.parse(limit) : {
+            total: this.opts.total,
+            remaining: this.opts.total,
+            reset: timeNow + this.opts.expire
+        }
+
+        if (timeNow > limit.reset) {
+            limit.reset = timeNow + this.opts.expire;
+            limit.remaining = this.opts.total;
+        }
+
+        // do not allow negative remaining
+        limit.remaining = Math.max(Number(limit.remaining) + change, -1);
+
+        this.db.set(key, JSON.stringify(limit), 'PX', this.opts.expire, (e) => {
+            if (!this.opts.skipHeaders) {
+                res.set('X-RateLimit-Limit', limit.total);
+                res.set('X-RateLimit-Reset', Math.ceil(limit.reset / 1000)); // UTC epoch seconds
+                res.set('X-RateLimit-Remaining', Math.max(limit.remaining, 0));
+            }
+
+            if (limit.remaining >= 0) {
+                return next();
+            }
+
+            if (!this.opts.skipHeaders) {
+                res.set('Retry-After', (limit.reset - Date.now()) / 1000);
+            }
+
+            this.opts.onRateLimited(req, res, next);
+        });
+    });
+}
+
+/*if (typeof(opts.lookup) === 'function') {
+    var callableLookup = opts.lookup;
+
+    RateLimiter = function(RateLimiter, req, res, next) {
+        return callableLookup(req, res, opts, function() {
+            return RateLimiter(req, res, next);
+        });
+    }.bind(this, RateLimiter)
+}*/
+
+module.exports = RateLimiter;
