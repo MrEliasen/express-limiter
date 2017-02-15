@@ -1,5 +1,13 @@
 ## Express rate-limiter
-Rate limiting middleware for Express applications built on redis
+Rate limiting middleware for Express applications built on redis.
+
+Changed from original:
+
+* Added option to manually increment/decrease rate limit hits.
+* Added You can now specify a list of paths to attache to, allowing you to exclude specific paths.
+* General clean ups and other bits I personally felt was needed.
+
+### How to use
 
 ``` sh
 npm install express-limiter --save
@@ -40,6 +48,7 @@ limiter(options)
 ```
 
  - `path`: `String` *optional* route path to the request
+ - `paths`: `Array` *optional* array of route paths to the request
  - `method`: `String` *optional* http method. accepts `get`, `post`, `put`, `delete`, and of course Express' `all`
  - `lookup`: `Function|String|Array.<String>` value lookup on the request object. Can be a single value, array or function. See [examples](#examples) for common usages
  - `total`: `Number` allowed number of requests before getting rate limited
@@ -79,6 +88,13 @@ limiter({
 // limit users on same IP
 limiter({
   path: '*',
+  method: 'all',
+  lookup: ['user.id', 'connection.remoteAddress']
+})
+
+// specific paths to apply the limiter to. Useful if you need to exclude a specific endpoint.
+limiter({
+  paths: ['/api/users', '/api/products'],
   method: 'all',
   lookup: ['user.id', 'connection.remoteAddress']
 })
